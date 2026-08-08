@@ -1,0 +1,624 @@
+{% extends "base.html" %}
+{% block title %}工作台{% endblock %}
+{% block content %}
+<div x-data="workspace('{{ project_uuid }}')" x-init="load()" class="flex flex-col lg:flex-row gap-6">
+    <div class="lg:w-64 shrink-0">
+        <div class="bg-white rounded-xl shadow-sm border p-4 sticky top-4">
+            <h2 class="font-semibold text-sm text-gray-500 uppercase mb-3">页面列表</h2>
+            <div class="space-y-1 max-h-[70vh] overflow-y-auto">
+                <template x-for="s in slides" :key="s.id">
+                    <div @click="selectSlide(s)"
+                        :class="{'slide-active': currentSlide && currentSlide.id === s.id}"
+                        class="p-2 rounded-lg cursor-pointer hover:bg-gray-100 transition text-sm flex items-center gap-2">
+                        <span :class="'status-dot status-' + s.status" class="shrink-0" style="width:6px;height:6px;"></span>
+                        <span class="truncate" x-text="'P' + s.slide_number + (s.title ? ': ' + s.title : '')"></span>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <div class="flex-1 min-w-0">
+        <div class="bg-white rounded-xl shadow-sm border p-6">
+            <template x-if="error">
+                <div class="bg-red-50 text-red-700 p-3 rounded-lg mb-4" x-text="error" @click="error=''"></div>
+            </template>
+
+            <div x-show="!slides.length && !loading" class="text-center py-20 text-gray-400">
+                <p class="text-lg mb-2">请先上传PDF文件</p>
+                <label class="inline-block bg-blue-600 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-blue-700 mt-2">
+                    选择PDF文件 (.pdf)
+                    <input type="file" accept=".pdf" @change="uploadPDF" class="hidden">
+                </label>
+            </div>
+            <div x-show="uploadingPDF" class="text-center py-20 text-gray-400">
+                <div class="inline-block w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-3"></div>
+                <p class="text-lg">正在解析PDF文件，请稍候...</p>
+            </div>
+
+            <template x-if="slides.length">
+                <div>
+                    <div class="flex flex-wrap items-center gap-2 mb-4 border-b pb-4">
+                        <h1 class="text-xl font-bold" x-text="project.name"></h1>
+                        <span :class="'status-dot status-' + project.status" :title="project.status"></span>
+                        <span class="text-xs text-gray-400 border rounded px-2 py-1" x-text="'TTS 模型: ' + (ttsModel === 'base' ? 'Base (声音克隆)' : 'CustomVoice (预设音色)')"></span>
+                        <button @click="switchModel()" :disabled="modelSwitching"
+                            class="text-xs bg-purple-50 text-purple-600 border border-purple-200 px-2 py-1 rounded hover:bg-purple-100 disabled:opacity-50"
+                            x-text="modelSwitching ? modelSwitchMsg : (ttsModel === 'base' ? '切换到预设音色' : '切换到声音克隆')"></button>
+                        <select x-model="llmModel" class="border rounded px-2 py-1 text-xs text-gray-600">
+                            <option value="deepseek-v4-flash" x-text="llmModel === 'deepseek-v4-flash' ? 'v4-flash (已选)' : 'v4-flash'"></option>
+                            <option value="deepseek-v4-pro" x-text="llmModel === 'deepseek-v4-pro' ? 'v4-pro (已选)' : 'v4-pro'"></option>
+                        </select>
+                        <label class="text-sm text-blue-600 cursor-pointer hover:underline ml-auto">
+                            重新上传PDF
+                            <input type="file" accept=".pdf" @change="uploadPDF" class="hidden">
+                        </label>
+                        
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                        <div>
+                            <label class="text-xs text-gray-500">课程主题</label>
+                            <div class="flex gap-2">
+                                <input x-model="project.topic" type="text" class="border rounded-lg px-3 py-2 flex-1 text-sm"
+                                    @change="saveTopic()" placeholder="输入或自动生成课程主题">
+                                <button @click="autoTopic()" class="text-xs text-blue-600 hover:underline whitespace-nowrap"
+                                    x-text="topicLoading ? '生成中...' : 'AI生成'"></button>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500">声音设置</label>
+                            <div class="flex gap-2">
+                                <select x-model="speaker" x-show="ttsModel === 'customvoice'" class="border rounded-lg px-3 py-2 text-sm flex-1">
+                                    <option value="">选择预设音色</option>
+                                    <optgroup label="中文">
+                                        <option value="vivian">vivian (明亮女声)</option>
+                                        <option value="serena">serena (温柔女声)</option>
+                                        <option value="uncle_fu">uncle_fu (低沉男声)</option>
+                                        <option value="dylan">dylan (北京男声)</option>
+                                        <option value="eric">eric (成都男声)</option>
+                                    </optgroup>
+                                    <optgroup label="英语">
+                                        <option value="ryan">ryan (动感男声)</option>
+                                        <option value="aiden">aiden (阳光男声)</option>
+                                    </optgroup>
+                                    <optgroup label="日语">
+                                        <option value="ono_anna">ono_anna (灵动女声)</option>
+                                    </optgroup>
+                                    <optgroup label="韩语">
+                                        <option value="sohee">sohee (温暖女声)</option>
+                                    </optgroup>
+                                </select>
+                                <select x-model="customVoice" x-show="ttsModel === 'base'" class="border rounded-lg px-3 py-2 text-sm flex-1">
+                                    <option value="">自定义克隆声音</option>
+                                    <template x-for="v in customVoices" :key="v.name">
+                                        <option :value="v.name" x-text="v.name"></option>
+                                    </template>
+                                </select>
+                                <button @click="showVoiceModal = true" class="text-xs text-blue-600 hover:underline whitespace-nowrap">+ 注册声线</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                        <div>
+                            <label class="text-xs text-gray-500">语速: <span x-text="speed"></span></label>
+                            <input type="range" x-model="speed" min="0.5" max="2.0" step="0.1" class="w-full">
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500">温度 (Temperature): <span x-text="temperature"></span></label>
+                            <input type="range" x-model="temperature" min="0.1" max="2.0" step="0.1" class="w-full">
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500">种子 (Seed):</label>
+                            <input type="number" x-model="seed" min="0" class="w-full border rounded-lg px-3 py-1 text-sm">
+                        </div>
+                    </div>
+
+                    <div class="flex flex-wrap items-center gap-2 mb-6">
+                        <label class="text-sm text-gray-500 cursor-pointer hover:text-blue-600 border rounded-lg px-3 py-2 bg-white">
+                            + 上传参考文件
+                            <input type="file" accept=".txt,.md,.pdf,.docx" @change="uploadRef" class="hidden">
+                        </label>
+                        <template x-for="r in refFiles" :key="r.id">
+                            <span class="bg-gray-100 rounded-full px-3 py-1 text-xs flex items-center gap-1">
+                                <span x-text="r.filename"></span>
+                                <button @click="deleteRef(r.id)" class="text-red-400 hover:text-red-600">&times;</button>
+                            </span>
+                        </template>
+                        <select x-model="wordCount" class="border rounded-lg px-3 py-2 text-sm">
+                            <option value="">字数: 100-300 (默认)</option>
+                            <option value="100-200">字数: 100-200</option>
+                            <option value="300-400">字数: 300-400</option>
+                            <option value="400-500">字数: 400-500</option>
+                        </select>
+                        <button @click="generateScript()" :disabled="scriptLoading"
+                            class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50 transition">
+                            <span x-show="!scriptLoading">一键生成讲稿</span>
+                            <span x-show="scriptLoading" class="pulse" x-text="'⏳ ' + scriptProgress"></span>
+                        </button>
+                        <button @click="generateAudio()" :disabled="audioLoading"
+                            class="bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700 disabled:opacity-50 transition">
+                            <span x-show="!audioLoading">生成全部音频</span>
+                            <span x-show="audioLoading" x-text="audioProgress"></span>
+                        </button>
+                        <button @click="generateVideo()" :disabled="videoLoading"
+                            class="bg-orange-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-orange-700 disabled:opacity-50 transition">
+                            <span x-show="!videoLoading && !videoPath">生成视频</span>
+                            <span x-show="!videoLoading && videoPath">重新生成</span>
+                            <span x-show="videoLoading" class="pulse" x-text="'⏳ ' + videoProgress"></span>
+                        </button>
+                        <button x-show="videoPath" @click="downloadVideo()"
+                            class="bg-red-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-red-700 transition">
+                            下载视频
+                        </button>
+                    </div>
+
+                    <div x-show="currentSlide" class="border rounded-xl p-5 fade-in">
+                        <div class="flex items-center justify-between mb-3">
+                            <h3 class="font-bold text-gray-700">
+                                第 <span x-text="currentSlide.slide_number"></span> 页:
+                                <span x-text="currentSlide.title || '无标题'"></span>
+                            </h3>
+                            <span class="text-xs text-gray-400" :class="'status-dot status-' + currentSlide.status"></span>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <label class="text-xs text-gray-500 mb-1 block">PDF 预览</label>
+                                <div class="bg-gray-100 rounded-lg overflow-hidden flex items-center justify-center" style="min-height:180px;">
+                                    <img x-show="currentSlide && !imgError"
+                                        :src="'/api/projects/' + projectUuid + '/slide-image/' + currentSlide.slide_number"
+                                        class="w-full object-contain" style="max-height:300px;"
+                                        @error="imgError = true" @load="imgError = false">
+                                    <div x-show="!currentSlide || imgError" class="text-gray-400 text-sm">
+                                        <span x-show="!currentSlide">选择页面查看预览</span>
+                                        <span x-show="currentSlide && imgError">图片加载失败</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-500">PDF 文本内容</label>
+                                <pre class="bg-gray-50 rounded-lg p-3 text-sm text-gray-600 max-h-40 overflow-y-auto whitespace-pre-wrap"
+                                    x-text="currentSlide.content"></pre>
+                            </div>
+                        </div>
+                        <div class="mb-4">
+                            <label class="text-xs text-gray-500">备注</label>
+                            <pre class="bg-gray-50 rounded-lg p-3 text-sm text-gray-600 max-h-32 overflow-y-auto whitespace-pre-wrap"
+                                x-text="currentSlide.notes || '无备注'"></pre>
+                        </div>
+
+                        <label class="text-xs text-gray-500">旁白讲稿</label>
+                        <textarea x-model="currentSlide.narration" @change="saveNarration()"
+                            class="w-full border rounded-lg p-3 text-sm min-h-[120px] focus:ring-2 focus:ring-blue-500 outline-none"
+                            placeholder="点击&#34;生成本页讲稿&#34;或手动输入旁白..."></textarea>
+
+                        <div x-show="currentSlide.narration_audio" class="mt-3">
+                            <label class="text-xs text-gray-500 mb-1 block">音频预览</label>
+                            <audio controls class="w-full" :src="'/outputs/' + currentSlide.narration_audio"></audio>
+                        </div>
+                        <div class="mt-2 flex gap-2">
+                            <button @click="generateSlideScript()" :disabled="singleScriptLoading"
+                                class="text-xs text-blue-600 hover:underline disabled:opacity-50">
+                                <span x-show="!singleScriptLoading" x-text="currentSlide.narration ? '重新生成本页讲稿' : '生成本页讲稿'"></span>
+                                <span x-show="singleScriptLoading" class="pulse">⏳ 生成中...</span>
+                            </button>
+                            <button @click="generateSingleAudio()" :disabled="singleAudioLoading"
+                                class="text-xs text-blue-600 hover:underline disabled:opacity-50">
+                                <span x-show="!singleAudioLoading" x-text="currentSlide.narration_audio ? '重新生成此页音频' : '单独生成此页音频'"></span>
+                                <span x-show="singleAudioLoading" class="pulse">⏳ 生成中...</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <div x-show="loading && !uploadingPDF" class="text-center py-20 text-gray-400">
+                <p>加载中...</p>
+            </div>
+
+            <div x-show="showVoiceModal" class="fixed inset-0 bg-black/40 z-50 flex items-center justify-center" @click.self="showVoiceModal = false">
+                <div class="bg-white rounded-xl p-6 w-full max-w-md mx-4 shadow-lg">
+                    <h3 class="font-bold text-lg mb-4">注册自定义声线</h3>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="text-xs text-gray-500">声线名称</label>
+                            <input x-model="newVoiceName" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="例如: 我的声音">
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500">上传音频</label>
+                            <label class="block w-full border border-dashed rounded-lg px-3 py-2 text-sm text-center cursor-pointer hover:border-blue-400 transition">
+                                <input type="file" accept=".wav,.mp3,.ogg,.flac" @change="onVoiceFileChange" class="hidden">
+                                <span x-text="newVoiceAudioFile ? newVoiceAudioFile.name : '点击选择音频文件 (wav/mp3)'"></span>
+                            </label>
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500">或填写音频 URL</label>
+                            <input x-model="newVoiceAudioUrl" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="https://example.com/audio.wav">
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500">参考文本 (音频对应的文本内容)</label>
+                            <input x-model="newVoiceText" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="音频中说的话">
+                        </div>
+                    </div>
+                    <div class="flex gap-2 mt-4 justify-end">
+                        <button @click="showVoiceModal = false" class="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
+                        <button @click="createVoice()" :disabled="voiceLoading" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                            <span x-show="!voiceLoading">注册</span>
+                            <span x-show="voiceLoading">注册中...</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function workspace(projectUuid) {
+    return {
+        projectUuid: projectUuid,
+        project: { name: '', topic: '', status: 'draft', composed_audio: '', video_path: '' },
+        slides: [],
+        currentSlide: null,
+        refFiles: [],
+        speaker: 'vivian',
+        customVoice: '',
+        customVoices: [],
+        llmModel: 'deepseek-v4-flash',
+        ttsModel: 'base',
+        modelSwitching: false,
+        modelSwitchMsg: '',
+        voiceLoading: false,
+        showVoiceModal: false,
+        newVoiceName: '',
+        newVoiceAudioFile: null,
+        newVoiceAudioUrl: '',
+        newVoiceText: '',
+        wordCount: '',
+        speed: 1.0,
+        temperature: 1.0,
+        seed: null,
+        loading: true,
+        uploadingPDF: false,
+        error: '',
+        imgError: false,
+        scriptLoading: false,
+        singleScriptLoading: false,
+        scriptProgress: '',
+        audioLoading: false,
+        singleAudioLoading: false,
+        audioProgress: '',
+        topicLoading: false,
+        composedAudio: '',
+        videoLoading: false,
+        videoProgress: '',
+        videoPath: '',
+        async switchModel() {
+            const target = this.ttsModel === 'base' ? 'customvoice' : 'base';
+            if (!confirm('切换到 ' + (target === 'base' ? '声音克隆' : '预设音色') + ' 模式，需要约 40-60 秒，是否继续？')) return;
+            this.modelSwitching = true;
+            this.modelSwitchMsg = '切换中...';
+            try {
+                const r = await axios.post('/api/model/switch', { model: target });
+                if (!r.data.ok) {
+                    this.error = r.data.message;
+                    this.modelSwitching = false;
+                    return;
+                }
+                const poll = async () => {
+                    const sr = await axios.get('/api/model/status');
+                    const s = sr.data.switch;
+                    this.modelSwitchMsg = s.message;
+                    if (s.status === 'switching') {
+                        setTimeout(poll, 2000);
+                    } else if (s.status === 'completed') {
+                        this.ttsModel = sr.data.model;
+                        this.modelSwitching = false;
+                        this.modelSwitchMsg = '';
+                        this.error = '';
+                    } else {
+                        this.error = '切换失败: ' + s.message;
+                        this.modelSwitching = false;
+                    }
+                };
+                poll();
+            } catch(e) {
+                this.error = '切换失败: ' + (e.response?.data?.detail || e.message);
+                this.modelSwitching = false;
+            }
+        },
+
+        async load() {
+            try {
+                const [pr, sr, rr, vr, mr] = await Promise.all([
+                    axios.get('/api/projects/' + this.projectUuid),
+                    axios.get('/api/projects/' + this.projectUuid + '/slides'),
+                    axios.get('/api/projects/' + this.projectUuid + '/reference-files'),
+                    axios.get('/api/voices/').catch(() => ({ data: [] })),
+                    axios.get('/api/model/status').catch(() => ({ data: { model: 'base', ready: true } })),
+                ]);
+                this.project = pr.data;
+                this.slides = sr.data;
+                this.refFiles = rr.data;
+                this.customVoices = vr.data;
+                this.ttsModel = mr.data.model;
+                this.composedAudio = pr.data.composed_audio || '';
+                this.videoPath = pr.data.video_path || '';
+                if (this.slides.length) this.selectSlide(this.slides[0]);
+            } catch(e) { this.error = '加载失败: ' + e.message; }
+            this.loading = false;
+        },
+
+        selectSlide(s) { this.currentSlide = { ...s }; this.imgError = false; },
+
+        async uploadPDF(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            this.uploadingPDF = true;
+            this.loading = true;
+            const fd = new FormData(); fd.append('file', f);
+            try {
+                const r = await axios.post('/api/projects/' + this.projectUuid + '/upload-pdf', fd);
+                location.reload();
+            } catch(e) { this.error = '上传失败: ' + (e.response?.data?.detail || e.message); this.uploadingPDF = false; this.loading = false; }
+        },
+
+        async uploadRef(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            const fd = new FormData(); fd.append('file', f);
+            try {
+                await axios.post('/api/projects/' + this.projectUuid + '/reference-files', fd);
+                const rr = await axios.get('/api/projects/' + this.projectUuid + '/reference-files');
+                this.refFiles = rr.data;
+            } catch(e) { this.error = '上传失败: ' + (e.response?.data?.detail || e.message); }
+        },
+
+        async deleteRef(id) {
+            await axios.delete('/api/projects/' + this.projectUuid + '/reference-files/' + id);
+            this.refFiles = this.refFiles.filter(r => r.id !== id);
+        },
+
+        async saveTopic() {
+            await axios.put('/api/projects/' + this.projectUuid, { topic: this.project.topic });
+        },
+
+        async autoTopic() {
+            this.topicLoading = true;
+            try {
+                const r = await axios.post('/api/scripts/' + this.projectUuid + '/auto-topic');
+                this.project.topic = r.data.topic;
+                await this.saveTopic();
+            } catch(e) { this.error = '生成主题失败: ' + (e.response?.data?.detail || e.message); }
+            this.topicLoading = false;
+        },
+
+        async generateScript() {
+            this.scriptLoading = true;
+            try {
+                const r = await axios.post('/api/scripts/generate', {
+                    project_id: this.project.id,
+                    word_count: this.wordCount,
+                    llm_model: this.llmModel,
+                });
+                const taskId = r.data.task_id;
+                const poll = async () => {
+                    const tr = await axios.get('/api/scripts/generate/task/' + taskId);
+                    const t = tr.data;
+                    if (t.status === 'running') {
+                        this.scriptProgress = t.message;
+                        const sr = await axios.get('/api/projects/' + this.projectUuid + '/slides');
+                        this.slides = sr.data;
+                        if (this.currentSlide) {
+                            const updated = this.slides.find(s => s.id === this.currentSlide.id);
+                            if (updated) this.currentSlide = { ...updated };
+                        }
+                        setTimeout(poll, 1500);
+                    } else if (t.status === 'completed') {
+                        const sr = await axios.get('/api/projects/' + this.projectUuid + '/slides');
+                        this.slides = sr.data;
+                        this.project.status = 'scripted';
+                        if (this.currentSlide) {
+                            const updated = this.slides.find(s => s.id === this.currentSlide.id);
+                            if (updated) this.currentSlide = { ...updated };
+                        }
+                        this.scriptLoading = false;
+                    } else {
+                        this.error = '讲稿生成失败: ' + t.message;
+                        this.scriptLoading = false;
+                    }
+                };
+                poll();
+            } catch(e) { this.error = '讲稿生成失败: ' + (e.response?.data?.detail || e.message); this.scriptLoading = false; }
+        },
+
+        async generateSlideScript() {
+            if (!this.currentSlide) return;
+            this.singleScriptLoading = true;
+            this.currentSlide.narration = '';
+            try {
+                const r = await axios.post('/api/scripts/slides/' + this.currentSlide.id + '/generate', {
+                    word_count: this.wordCount,
+                    llm_model: this.llmModel,
+                });
+                const idx = this.slides.findIndex(s => s.id === this.currentSlide.id);
+                if (idx >= 0) this.slides[idx] = r.data;
+                this.currentSlide = { ...r.data };
+            } catch(e) { this.error = '讲稿生成失败: ' + (e.response?.data?.detail || e.message); }
+            this.singleScriptLoading = false;
+        },
+
+        async saveNarration() {
+            if (!this.currentSlide) return;
+            try {
+                await axios.put('/api/scripts/slides/' + this.currentSlide.id, { narration: this.currentSlide.narration });
+            } catch(e) {}
+        },
+
+        voiceId() {
+            if (this.customVoice) {
+                const v = this.customVoices.find(v => v.name === this.customVoice);
+                return v ? v.voice_id || v.id : null;
+            }
+            return null;
+        },
+
+        async generateAudio() {
+            this.audioLoading = true;
+            this.audioProgress = '启动中...';
+            try {
+                const r = await axios.post('/api/audio/generate', {
+                    project_id: this.project.id,
+                    speaker: this.speaker || null,
+                    voice_description: null,
+                    voice_id: this.voiceId(),
+                    speed: parseFloat(this.speed),
+                    seed: this.seed ? parseInt(this.seed) : null,
+                    temperature: parseFloat(this.temperature),
+                });
+                const taskId = r.data.task_id;
+                const poll = async () => {
+                    const tr = await axios.get('/api/audio/task/' + taskId);
+                    const t = tr.data;
+                    this.audioProgress = t.message + ' (' + t.progress + '%)';
+                    if (t.completed_slides && t.completed_slides.length) {
+                        for (const cs of t.completed_slides) {
+                            const idx = this.slides.findIndex(s => s.id === cs.slide_id);
+                            if (idx >= 0) {
+                                this.slides[idx].narration_audio = cs.audio_path;
+                                this.slides[idx].status = 'audio_generated';
+                            }
+                        }
+                        if (this.currentSlide) {
+                            const updated = this.slides.find(s => s.id === this.currentSlide.id);
+                            if (updated && updated.narration_audio) this.currentSlide = { ...updated };
+                        }
+                    }
+                    if (t.status === 'running' || t.status === 'composing') {
+                        setTimeout(poll, 1500);
+                    } else if (t.status === 'completed') {
+                        this.audioLoading = false;
+                        if (t.result && t.result.composed_audio) {
+                            this.composedAudio = t.result.composed_audio;
+                        }
+                        this.project.status = 'completed';
+                        await this.load();
+                    } else {
+                        this.error = '音频生成失败: ' + t.message;
+                        this.audioLoading = false;
+                    }
+                };
+                poll();
+            } catch(e) {
+                this.error = '启动失败: ' + (e.response?.data?.detail || e.message);
+                this.audioLoading = false;
+            }
+        },
+
+        async generateSingleAudio() {
+            if (!this.currentSlide || !this.currentSlide.narration) return;
+            this.singleAudioLoading = true;
+            this.currentSlide.narration_audio = '';
+            try {
+                const r = await axios.post('/api/audio/generate', {
+                    project_id: this.project.id,
+                    slide_id: this.currentSlide.id,
+                    speaker: this.speaker || null,
+                    voice_description: null,
+                    voice_id: this.voiceId(),
+                    speed: parseFloat(this.speed),
+                    seed: this.seed ? parseInt(this.seed) : null,
+                    temperature: parseFloat(this.temperature),
+                });
+                const taskId = r.data.task_id;
+                const poll = async () => {
+                    const tr = await axios.get('/api/audio/task/' + taskId);
+                    if (tr.data.status === 'running' || tr.data.status === 'composing') {
+                        setTimeout(poll, 2000);
+                    } else if (tr.data.status === 'completed') {
+                        await this.load();
+                        this.currentSlide = this.slides.find(s => s.id === this.currentSlide.id);
+                        this.singleAudioLoading = false;
+                    } else {
+                        this.error = tr.data.message;
+                        this.singleAudioLoading = false;
+                    }
+                };
+                poll();
+            } catch(e) {
+                this.error = '启动失败: ' + (e.response?.data?.detail || e.message);
+                this.singleAudioLoading = false;
+            }
+        },
+
+        downloadAudio() {
+            if (this.composedAudio) window.open('/outputs/' + this.composedAudio);
+        },
+
+        async generateVideo() {
+            if (this.videoPath && !confirm('重新生成将覆盖当前视频文件，是否继续？')) return;
+            this.videoLoading = true;
+            this.videoProgress = '启动中...';
+            try {
+                const r = await axios.post('/api/video/generate', { project_id: this.project.id });
+                const taskId = r.data.task_id;
+                const poll = async () => {
+                    const tr = await axios.get('/api/video/task/' + taskId);
+                    const t = tr.data;
+                    this.videoProgress = t.message;
+                    if (t.status === 'running') {
+                        setTimeout(poll, 3000);
+                    } else if (t.status === 'completed') {
+                        this.videoLoading = false;
+                        this.videoPath = t.result.video_path;
+                    } else {
+                        this.error = '视频生成失败: ' + t.message;
+                        this.videoLoading = false;
+                    }
+                };
+                poll();
+            } catch(e) {
+                this.error = '启动失败: ' + (e.response?.data?.detail || e.message);
+                this.videoLoading = false;
+            }
+        },
+
+        downloadVideo() {
+            if (this.videoPath) window.open('/outputs/' + this.videoPath);
+        },
+
+        onVoiceFileChange(e) {
+            this.newVoiceAudioFile = e.target.files[0] || null;
+        },
+
+        async createVoice() {
+            this.voiceLoading = true;
+            try {
+                const fd = new FormData();
+                fd.append('name', this.newVoiceName);
+                fd.append('audio_url', this.newVoiceAudioUrl);
+                fd.append('prompt_text', this.newVoiceText);
+                if (this.newVoiceAudioFile) {
+                    fd.append('audio', this.newVoiceAudioFile);
+                }
+                await axios.post('/api/voices/', fd);
+                this.showVoiceModal = false;
+                this.newVoiceName = '';
+                this.newVoiceAudioFile = null;
+                this.newVoiceAudioUrl = '';
+                this.newVoiceText = '';
+                const vr = await axios.get('/api/voices/');
+                this.customVoices = vr.data;
+            } catch(e) {
+                const detail = e.response?.data?.detail;
+                const msg = typeof detail === 'object' ? JSON.stringify(detail) : (String(detail || e.message));
+                this.error = '声线注册失败: ' + msg;
+            }
+            this.voiceLoading = false;
+        }
+    };
+}
+</script>
+{% endblock %}

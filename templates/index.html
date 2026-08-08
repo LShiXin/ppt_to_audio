@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}项目列表{% endblock %}
+{% block content %}
+<div x-data="projectList()" x-init="load()">
+    <div class="flex items-center justify-between mb-6">
+        <h1 class="text-2xl font-bold text-gray-800">我的项目</h1>
+        <button @click="showCreate = true"
+            class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">
+            + 新建项目
+        </button>
+    </div>
+
+    <div x-show="showCreate" class="fixed inset-0 bg-black/30 flex items-center justify-center z-50 fade-in">
+        <div class="bg-white rounded-xl p-6 w-full max-w-md shadow-xl" @click.away="showCreate = false">
+            <h2 class="text-lg font-bold mb-4">创建新项目</h2>
+            <input x-model="newName" type="text" placeholder="项目名称"
+                class="w-full border rounded-lg px-3 py-2 mb-3 focus:ring-2 focus:ring-blue-500 outline-none">
+            <input x-model="newTopic" type="text" placeholder="课程主题 (可选，后续可编辑)"
+                class="w-full border rounded-lg px-3 py-2 mb-4 focus:ring-2 focus:ring-blue-500 outline-none">
+            <div class="flex justify-end gap-2">
+                <button @click="showCreate = false" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
+                <button @click="create()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid gap-4">
+        <template x-if="projects.length === 0">
+            <div class="text-center text-gray-500 py-20">
+                <p class="text-lg mb-2">还没有项目</p>
+                <p class="text-sm">点击"新建项目"开始创建</p>
+            </div>
+        </template>
+        <template x-for="p in projects" :key="p.id">
+            <div class="bg-white rounded-xl p-5 shadow-sm border hover:shadow-md transition cursor-pointer"
+                @click="window.location.href='/workspace/' + p.uuid">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="font-semibold text-gray-800" x-text="p.name"></h3>
+                        <p class="text-sm text-gray-500 mt-1" x-text="p.topic || '主题待定'"></p>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span :class="'status-dot status-' + p.status" :title="p.status"></span>
+                        <span class="text-xs text-gray-400" x-text="p.updated_at"></span>
+                        <button @click.stop="del(p.id)" class="text-red-400 hover:text-red-600 text-sm">删除</button>
+                    </div>
+                </div>
+                <div class="mt-2 text-xs text-gray-400">
+                    状态: <span x-text="statusLabel(p.status)"></span>
+                    <span x-show="p.ppt_filename" class="ml-3">PPT: <span x-text="p.ppt_filename"></span></span>
+                </div>
+            </div>
+        </template>
+    </div>
+</div>
+
+<script>
+function projectList() {
+    return {
+        projects: [],
+        showCreate: false,
+        newName: '',
+        newTopic: '',
+        async load() {
+            const r = await axios.get('/api/projects/');
+            this.projects = r.data;
+        },
+        async create() {
+            if (!this.newName.trim()) return;
+            await axios.post('/api/projects/', { name: this.newName, topic: this.newTopic });
+            this.showCreate = false;
+            this.newName = '';
+            this.newTopic = '';
+            await this.load();
+        },
+        async del(id) {
+            if (!confirm('删除项目将清除全部数据（包括 PDF 文件、讲稿、音频、视频等），确定删除？')) return;
+            await axios.delete('/api/projects/' + p.uuid);
+            await this.load();
+        },
+        statusLabel(s) {
+            const m = { draft: '草稿', parsed: '已解析', scripted: '讲稿已生成', completed: '已完成' };
+            return m[s] || s;
+        }
+    };
+}
+</script>
+{% endblock %}

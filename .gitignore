@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# 运行时数据与用户文件
+data.db
+/models/
+logs/
+uploads/
+outputs/
+voices/
+
+# 音视频产物
+*.wav
+*.mp3
+*.mp4
+
+# 系统文件
+.DS_Store
+*.swp

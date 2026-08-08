@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}声音管理{% endblock %}
+{% block content %}
+<div x-data="voiceManager()" x-init="load()">
+    <div class="flex items-center justify-between mb-6">
+        <h1 class="text-2xl font-bold text-gray-800">声音管理</h1>
+        <button @click="showCreate = true"
+            class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">
+            + 添加新声音
+        </button>
+    </div>
+
+    <div x-show="showCreate" class="fixed inset-0 bg-black/30 flex items-center justify-center z-50 fade-in">
+        <div class="bg-white rounded-xl p-6 w-full max-w-md shadow-xl" @click.away="showCreate = false">
+            <h2 class="text-lg font-bold mb-4">克隆新声音</h2>
+            <input x-model="voiceName" type="text" placeholder="声音名称"
+                class="w-full border rounded-lg px-3 py-2 mb-3 focus:ring-2 focus:ring-blue-500 outline-none">
+            <input x-model="voiceDesc" type="text" placeholder="描述 (可选)"
+                class="w-full border rounded-lg px-3 py-2 mb-3 focus:ring-2 focus:ring-blue-500 outline-none">
+            <input x-model="promptText" type="text" placeholder="参考音频对应的文本 (重要: 用于对齐)"
+                class="w-full border rounded-lg px-3 py-2 mb-3 focus:ring-2 focus:ring-blue-500 outline-none">
+            <label class="block mb-3">
+                <span class="text-sm text-gray-500">参考音频 (3-10秒, 人声清晰)</span>
+                <input type="file" accept=".wav,.mp3,.ogg,.flac" @change="onFile" class="block mt-1">
+            </label>
+            <div x-show="msg" :class="msgType === 'error' ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'"
+                class="p-3 rounded-lg mb-3 text-sm" x-text="msg"></div>
+            <div class="flex justify-end gap-2">
+                <button @click="showCreate=false;msg=''" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
+                <button @click="create()" :disabled="uploading"
+                    class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                    <span x-show="!uploading">创建</span>
+                    <span x-show="uploading">上传中...</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <template x-if="voices.length === 0">
+            <div class="col-span-full text-center text-gray-500 py-20">还没有克隆的声音</div>
+        </template>
+        <template x-for="v in voices" :key="v.name">
+            <div class="bg-white rounded-xl p-5 shadow-sm border">
+                <div class="flex items-center justify-between">
+                    <h3 class="font-semibold text-gray-800" x-text="v.name"></h3>
+                    <button @click="remove(v.name)" class="text-red-400 hover:text-red-600 text-sm">删除</button>
+                </div>
+                <p class="text-sm text-gray-500 mt-1" x-text="v.description || '无描述'"></p>
+                <p class="text-xs text-gray-400 mt-2" x-text="'参考文本: ' + (v.prompt_text || '未提供')"></p>
+            </div>
+        </template>
+    </div>
+</div>
+
+<script>
+function voiceManager() {
+    return {
+        voices: [],
+        showCreate: false,
+        voiceName: '',
+        voiceDesc: '',
+        promptText: '',
+        audioFile: null,
+        uploading: false,
+        msg: '',
+        msgType: 'error',
+        async load() {
+            const r = await axios.get('/api/voices/');
+            this.voices = r.data;
+        },
+        onFile(e) { this.audioFile = e.target.files[0]; },
+        async create() {
+            if (!this.voiceName.trim() || !this.audioFile || !this.promptText.trim()) {
+                this.msg = '请填写所有必填项'; this.msgType = 'error'; return;
+            }
+            this.uploading = true; this.msg = '';
+            const fd = new FormData();
+            fd.append('name', this.voiceName);
+            fd.append('description', this.voiceDesc);
+            fd.append('prompt_text', this.promptText);
+            fd.append('audio', this.audioFile);
+            try {
+                await axios.post('/api/voices/', fd);
+                this.showCreate = false;
+                this.voiceName = ''; this.voiceDesc = ''; this.promptText = ''; this.audioFile = null;
+                await this.load();
+            } catch(e) {
+                this.msg = e.response?.data?.detail || '创建失败';
+                this.msgType = 'error';
+            }
+            this.uploading = false;
+        },
+        async remove(name) {
+            if (!confirm('确定删除声音 "' + name + '"？')) return;
+            await axios.delete('/api/voices/' + name);
+            await this.load();
+        }
+    };
+}
+</script>
+{% endblock %}
