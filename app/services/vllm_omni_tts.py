@@ -240,7 +240,7 @@ async def generate_audio_with_segmentation(
     language: str = "Auto",
     instruct: str = "",
 ) -> str:
-    temp = temperature if temperature is not None else 1.0
+    temp = temperature if temperature is not None else 0.5
     spd = speed if speed is not None else 1.0
 
     segments = _segment_text(text)

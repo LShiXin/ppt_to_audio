@@ -134,8 +134,11 @@ async def switch_model(model_type: str) -> str:
     if _switch_task and not _switch_task.done():
         return "already_switching"
 
-    if model_type == _current_model:
+    if model_type == _current_model and is_ready():
         return "same_model"
+
+    if not is_ready() and model_type == _current_model:
+        logger.warning("vLLM-Omni not ready, restarting same model %s", model_type)
 
     _switch_status = {"status": "switching", "progress": 0, "message": f"正在切换到 {model_type} 模型..."}
 
