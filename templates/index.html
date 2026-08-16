@@ -42,7 +42,7 @@
                     <div class="flex items-center gap-3">
                         <span :class="'status-dot status-' + p.status" :title="p.status"></span>
                         <span class="text-xs text-gray-400" x-text="p.updated_at"></span>
-                        <button @click.stop="del(p.id)" class="text-red-400 hover:text-red-600 text-sm">删除</button>
+                        <button @click.stop="del(p.uuid)" class="text-red-400 hover:text-red-600 text-sm">删除</button>
                     </div>
                 </div>
                 <div class="mt-2 text-xs text-gray-400">
@@ -73,10 +73,14 @@ function projectList() {
             this.newTopic = '';
             await this.load();
         },
-        async del(id) {
+        async del(uuid) {
             if (!confirm('删除项目将清除全部数据（包括 PDF 文件、讲稿、音频、视频等），确定删除？')) return;
-            await axios.delete('/api/projects/' + p.uuid);
-            await this.load();
+            try {
+                await axios.delete('/api/projects/' + uuid);
+                await this.load();
+            } catch(e) {
+                alert('删除失败: ' + (e.response?.data?.detail || e.message));
+            }
         },
         statusLabel(s) {
             const m = { draft: '草稿', parsed: '已解析', scripted: '讲稿已生成', completed: '已完成' };

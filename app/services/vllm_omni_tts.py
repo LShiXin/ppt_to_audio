@@ -38,17 +38,40 @@ def _is_base_model() -> bool:
     return get_current_model() == "base"
 
 
+_SHORT_SEGMENT_CHARS = 15
+
+
+def _merge_short_segments(parts: list[str]) -> list[str]:
+    """Merge short segments into the previous one so every request carries
+    enough context. Isolated short sentences (e.g. "第一，审计意见有跟随性倾向")
+    have high sampling entropy and tend to loop without EOS on Qwen3-TTS."""
+    merged: list[str] = []
+    for p in parts:
+        if merged and len(p) <= _SHORT_SEGMENT_CHARS:
+            merged[-1] = f"{merged[-1]}，{p}"
+        else:
+            merged.append(p)
+    return merged
+
+
 def _segment_text(text: str) -> list[str]:
     parts = text.replace("\n", "。").replace("！", "。").replace("？", "。").split("。")
     parts = [p.strip() for p in parts if p.strip()]
     if not parts:
         return [text.strip()]
+
+    # Merge short sentence-level segments first.
+    merged = _merge_short_segments(parts)
+
     result = []
-    for p in parts:
+    for p in merged:
         if len(p) > _SEGMENT_MAX_CHARS:
             subs = p.replace("，", "，").replace("：", "，").split("，")
             subs = [s.strip() for s in subs if s.strip()]
-            result.extend(subs)
+            # Merge short comma-split fragments too, otherwise a long
+            # sentence without any 。！？ (e.g. a greeting) leaves isolated
+            # 2-15 char segments that also tend to loop.
+            result.extend(_merge_short_segments(subs))
         else:
             result.append(p)
     return result
@@ -83,8 +106,10 @@ def _upload_voice(ref_audio_path: str, ref_text: str, voice_name: str) -> bool:
     with open(audio_path, "rb") as f:
         files = {"audio_sample": (audio_path.name, f, mime_type)}
         data = {"name": voice_name, "consent": "default"}
-        if ref_text:
-            data["ref_text"] = ref_text
+        # Do NOT send ref_text: it would enable ICL mode and the generated
+        # speech would start by re-reading the reference transcript. Voice
+        # cloning only needs the timbre, so upload the audio without a
+        # transcript (x-vector extraction).
         resp = requests.post(VOICES_ENDPOINT, files=files, data=data, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
 
@@ -131,6 +156,10 @@ def _call_speech_api(
         payload["instructions"] = instruct
     if seed is not None:
         payload["seed"] = seed
+    # Clamp temperature to a safe range: extreme low values (e.g. 0.1) can
+    # cause the Qwen3-TTS talker to loop without emitting EOS, running until
+    # max_tokens. Values outside [0.3, 1.5] are clamped.
+    temperature = max(0.3, min(1.5, temperature))
     if temperature != 1.0:
         payload.setdefault("extra_params", {})["temperature"] = temperature
 
@@ -203,7 +232,7 @@ async def generate_audio_voice_clone(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / output_filename
 
-    audio_stem = Path(ref_audio_path).stem
+    audio_stem = Path(ref_audio_path).parent.name
     voice_name = f"clone_{audio_stem}"
 
     logger.info("vLLM-Omni VoiceClone: ref=%s temp=%.2f text_len=%d",
@@ -278,8 +307,10 @@ async def generate_audio_with_segmentation(
         ref_text = voice_clone_prompt.get("prompt_text", "")
         from app.config import BASE_DIR
         full_audio_path = str(BASE_DIR / ref_audio)
-        audio_stem = Path(full_audio_path).stem
-        voice_name = f"clone_{audio_stem}"
+        # Voice name must be unique per clone voice. All reference audio files
+        # are named reference.wav, so use the parent dir (voice name) instead
+        # of the filename stem to avoid collisions.
+        voice_name = f"clone_{Path(full_audio_path).parent.name}"
     else:
         full_audio_path = ""
         ref_text = ""

@@ -97,7 +97,7 @@ ppt_to_audio/
 │   │   ├── model.py        # TTS 模型切换（Base / CustomVoice）
 │   │   └── digital_human.py# 数字人（占位，未实现）
 │   └── services/           # 业务服务层
-│       ├── vllm_process.py # vLLM-Omni 子进程管理（启动/停止/健康检查）
+│       ├── vllm_process.py # vLLM-Omni 子进程管理（启动/停止/健康检查/模型切换）
 │       ├── vllm_omni_tts.py# vLLM-Omni 语音合成（分句、声音克隆、推理锁）
 │       ├── local_tts.py    # 本地 Qwen3-TTS 合成（旧后端，兼容保留）
 │       ├── api_tts.py      # 远程 API 合成（兼容保留）
@@ -107,14 +107,17 @@ ppt_to_audio/
 │       ├── script_generator.py  # DeepSeek 讲稿生成
 │       ├── voice_clone_service.py  # 克隆声音存储
 │       ├── tts_engine.py   # 文本分句
+│       ├── thumbnails.py   # 幻灯片缩略图生成
 │       ├── audio_composer.py    # 音频拼接
 │       └── video_composer.py    # ffmpeg 视频合成
 ├── scripts/
-│   ├── setup_conda.sh      # 一键环境安装
-│   ├── start_all.sh        # 一键启动（vLLM-Omni + 应用）
-│   └── download_models.py  # 下载 Qwen3-TTS 模型
+│   ├── setup_conda.sh      # 一键环境安装（含 CUDA Toolkit + vLLM-Omni）
+│   ├── start_all.sh        # 一键启动（vLLM-Omni 自启动 + 应用，app=8003 / vllm=8000）
+│   ├── download_models.py  # 下载 Qwen3-TTS 模型
+│   └── patch_vllm_temperature.py  # vLLM 温度参数修补脚本
 ├── models/                 # 本地模型权重（不入库）
 │   ├── Qwen3-TTS-12Hz-0.6B-Base/         # 声音复刻模型
+│   ├── Qwen3-TTS-12Hz-1.7B-Base/         # 通用 base 模型
 │   └── Qwen3-TTS-12Hz-1.7B-CustomVoice/  # 预设音色模型
 ├── templates/              # Jinja2 页面
 │   ├── index.html          # 项目列表
@@ -149,14 +152,30 @@ sudo apt-get install -y ffmpeg sox poppler-utils tesseract-ocr tesseract-ocr-chi
 bash scripts/setup_conda.sh
 ```
 
-该脚本会自动：安装 Miniconda → 创建 conda 环境 `ppt2video`（Python 3.12）→ 安装 `requirements.txt` → 安装 PyTorch（CUDA 12.6/12.8）与 `qwen-tts` → 安装 sox → 下载 Qwen3-TTS CustomVoice 模型。
+该脚本会自动完成：安装 Miniconda → 创建 conda 环境 `ppt2video`（Python 3.12）→ 安装 `requirements.txt` → 安装 PyTorch（CUDA）与 `qwen-tts` → 安装 sox → **安装 CUDA Toolkit（nvcc，flashinfer JIT 编译必需）→ 安装 vLLM-Omni（含依赖）** → 下载 Qwen3-TTS CustomVoice 模型。
+
+> 脚本会执行 `conda install -c nvidia cuda-toolkit=13.2.2`，并用 pip 安装 vLLM 全家桶。若环境被重建导致 vLLM 丢失，重跑一次本脚本即可全部恢复。
 
 ### 3. 安装 vLLM-Omni（语音合成引擎）
 
+> 已包含在 `setup_conda.sh` 中，可跳过本节；如需手动安装，务必使用**已验证的版本组合**（见下）：
+
 ```bash
 conda activate ppt2video
-pip install vllm vllm-omni flashinfer-python
+conda install -c nvidia cuda-toolkit=13.2.2 -y
+pip install vllm==0.26.0 vllm-omni==0.26.0 flashinfer-python==0.6.14 -i https://pypi.tuna.tsinghua.edu.cn/simple --default-timeout=1000
+pip install -U quack-kernels nvidia-cutlass-dsl -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
+
+**版本兼容性（重要，不可随意更换）**：
+
+| 组件 | 版本 | 原因 |
+| --- | --- | --- |
+| `vllm` | `0.26.0` | `0.25.x` 移除了 `OmniRequest.num_in_flight_tokens`，推理必崩；`0.24.x` 缺少 `vllm.entrypoints.scale_out`，vllm-omni 无法导入 |
+| `vllm-omni` | `0.26.0` | 与 vllm 0.26 配套（版本对齐校验） |
+| `flashinfer-python` | `0.6.14` | vllm 0.26 的固定依赖 |
+| `quack-kernels` | `>=0.6.4` | `0.5.0` 与 cutlass 4.6 不兼容，报 `cutlass.cute.core` 无 `ThrMma` |
+| `cuda-toolkit` | `13.2.2` | 提供 `nvcc`；缺失时报 `Could not find nvcc`，flashinfer 无法 JIT 编译采样 kernel |
 
 > 需 NVIDIA GPU 与 CUDA 环境。vLLM-Omni 用于部署 Qwen3-TTS 多阶段推理服务。
 
@@ -170,7 +189,7 @@ python scripts/download_models.py
 
 ### 5. 启动服务
 
-一键启动（推荐，含 vLLM-Omni 引擎）：
+一键启动（推荐，含 vLLM-Omni 引擎自启动 + base 模型加载）：
 
 ```bash
 bash scripts/start_all.sh
@@ -188,6 +207,8 @@ conda activate ppt2video && python run.py
 
 访问 <http://localhost:8003>（应用端口，见下节说明）。
 
+> ⚠️ **不要用 `run.sh` / `run.py` 替代 `start_all.sh`**：`run.sh` 仅启用本地 TTS 后端（不启动 vLLM），`run.py` 固定 8003 端口且需先手动启动 vLLM。日常使用请始终执行 `bash scripts/start_all.sh`。
+
 ---
 
 ## 端口说明
@@ -198,7 +219,9 @@ conda activate ppt2video && python run.py
 | `8001 / 8002` | vLLM 多阶段引擎内部 NCCL 通信端口（自动占用） |
 | `8003` | Web 应用（FastAPI） |
 
-> **为什么应用不用 8001？** vLLM-Omni 的多阶段引擎（StageEngineCoreProc）会按顺序尝试 8000 → 8001 → 8002 作为 NCCL 通信端口。若应用占用 8001，会与引擎冲突导致启动失败，因此应用固定使用 `8003`。
+> **为什么应用不用 8000–8002？** vLLM-Omni 的多阶段引擎（StageEngineCoreProc）会按顺序尝试 8000 → 8001 → 8002 作为 NCCL 通信端口，API Server 固定占用 8000。若应用占用其中任一端口，vLLM 将无法绑定，base 模型无法自启动。因此应用固定使用 `8003`，且应用进程不得与 vLLM 同端口。
+>
+> 早期版本 `run.py` 曾硬编码 `8000`（与 vLLM 冲突），现已改为 `8003`。
 
 ---
 
@@ -226,13 +249,13 @@ conda activate ppt2video && python run.py
 | `VLLM_OMNI_BASE_URL` | `http://localhost:8000` | vLLM-Omni 服务地址 |
 | `VLLM_PORT` | `8000` | vLLM-Omni 服务端口 |
 | `VLLM_OMNI_MODEL` | `base` | TTS 模型：`base`（声音克隆）/ `customvoice`（预设音色） |
-| `VLLM_OMNI_GPU_COOLDOWN` | `3.0` | 分段推理间的 GPU 冷却等待（秒） |
+| `VLLM_OMNI_GPU_COOLDOWN` | `0` | 分段推理间的 GPU 冷却等待（秒），默认不等待 |
 | `DEEPSEEK_API_KEY` | 见下方说明 | DeepSeek API 密钥（**通过环境变量注入**） |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/v1` | DeepSeek 接口地址 |
 | `DEEPSEEK_MODEL` | `deepseek-v4-flash` | 讲稿生成所用模型 |
 | `TTS_DEVICE` | `cuda` | 本地 TTS 推理设备（旧后端） |
 
-> **DeepSeek 密钥**：`app/config.py` 中 `DEEPSEEK_API_KEY` 仅作本地占位默认值。部署到生产/公开环境前，务必通过环境变量注入真实密钥：
+> **DeepSeek 密钥**：`app/config.py` 中 `DEEPSEEK_API_KEY` 仅作本地占位默认值（`my_api_key`）。部署到生产/公开环境前，务必通过环境变量注入你自己的真实密钥：
 > ```bash
 > export DEEPSEEK_API_KEY=你的真实密钥
 > ```
@@ -342,7 +365,7 @@ conda activate ppt2video && python run.py
 
 ### vLLM-Omni 多阶段 TTS
 
-语音合成由独立的 vLLM-Omni 子进程提供（`vllm_process.py` 负责生命周期管理）：
+语音合成由独立的 vLLM-Omni 子进程提供（`vllm_process.py` 负责生命周期管理）。应用启动时（`lifespan`）若 `TTS_BACKEND=vllm_omni`，会自动拉起 `vllm serve --omni` 并加载 **base 模型**（`VLLM_OMNI_MODEL=base`），就绪后应用才完成启动：
 
 ```
 vllm serve models/Qwen3-TTS-12Hz-0.6B-Base --omni --port 8000
@@ -351,8 +374,9 @@ vllm serve models/Qwen3-TTS-12Hz-0.6B-Base --omni --port 8000
         └── Stage-1  StageEngineCoreProc  token → 波形（code2wav，CUDA Graph 加速）
 ```
 
-- 两阶段引擎各自加载模型并捕获 CUDA Graph，实测峰值显存约 **11GB**，建议 ≥ 12GB 显存。
-- 长文本经 `_segment_text` 分句，逐段调用 `/v1/audio/speech`，段间以 `VLLM_OMNI_GPU_COOLDOWN`（默认 3s）冷却，最后以 300ms 静音拼接。
+- 两阶段引擎各自加载模型并捕获 CUDA Graph，实测峰值显存约 **12GB**（含 KV cache），建议 ≥ 16GB 显存。
+- 首次启动会进行 flashinfer / inductor 内核编译，CPU 内存短暂飙升属正常现象，编译完成后回落。
+- 长文本经 `_segment_text` 分句，逐段调用 `/v1/audio/speech`，段间以 `VLLM_OMNI_GPU_COOLDOWN`（默认 0s）冷却，最后以 300ms 静音拼接。
 
 ### 并发控制：GPU 推理锁
 
@@ -396,16 +420,30 @@ SQLite 共四张表（见 `app/models/database.py`）：
 ## 常见问题 FAQ
 
 **Q：需要多大的显存？**
-A：vLLM-Omni 多阶段引擎实测峰值约 11GB（0.6B Base 模型 + CUDA Graph），建议 ≥ 12GB 显存。若使用旧版本地 TTS 后端（1.7B 模型），建议 ≥ 8GB。
+A：vLLM-Omni 多阶段引擎实测峰值约 12GB（0.6B Base 模型 + CUDA Graph + KV cache），建议 ≥ 16GB 显存。若使用旧版本地 TTS 后端（1.7B 模型），建议 ≥ 8GB。
 
 **Q：为什么只支持 PDF 转视频？**
 A：PPTX 渲染成图片依赖系统中文字体，字体缺失时排版错乱；PDF 为固定排版可稳定转图。规划通过 LibreOffice 无头渲染解决 PPTX 支持。
 
 **Q：启动时提示端口被占用？**
-A：`8000` 为 vLLM-Omni 服务，`8001/8002` 为其内部 NCCL 通信端口，应用固定使用 `8003`。请勿将应用配到 8000–8002 区间。
+A：`8000` 为 vLLM-Omni 服务，`8001/8002` 为其内部 NCCL 通信端口，应用固定使用 `8003`。请勿将应用配到 8000–8002 区间（`run.py` 已改为 8003）。启动前可清理残留：`pkill -9 -f StageEngineCoreProc && pkill -9 -f "vllm serve" && pkill -9 -f uvicorn`。
 
-**Q：显存占用到 11G 后立刻被释放、服务启动失败？**
-A：通常是旧进程未清理干净导致端口冲突或显存残留。先执行：`pkill -9 -f StageEngineCoreProc && pkill -9 -f vllm && pkill -9 -f uvicorn`，再重新启动。
+**Q：应用能起来，但 vLLM base 模型没自启动 / 启动失败？**
+A：按以下顺序排查：
+1. 是否用 `bash scripts/start_all.sh` 启动？（`run.sh` 不启用 vLLM 后端）
+2. 日志 `logs/app.log` 是否报 `FileNotFoundError: .../bin/vllm`？→ vLLM 未安装，重跑 `bash scripts/setup_conda.sh`。
+3. 日志 `logs/vllm_omni.log` 是否报 `Could not find nvcc`？→ 缺 CUDA Toolkit，`conda install -n ppt2video -c nvidia cuda-toolkit=13.2.2 -y`。
+4. 日志是否报 `cutlass.cute.core has no attribute 'ThrMma'`？→ quack 版本过旧，`pip install -U quack-kernels nvidia-cutlass-dsl`。
+5. 日志是否报 `OmniRequest has no attribute 'num_in_flight_tokens'`？→ vllm 版本不匹配，必须用 `vllm==0.26.0`（见安装章节版本表）。
+
+**Q：vLLM 启动时 CPU 内存占用极高 / 模型迟迟不进显存？**
+A：首次启动 flashinfer 与 inductor 会 JIT 编译 CUDA kernel，CPU 内存短暂暴涨（数 GB）属正常，编译完成后回落并加载显存。若长时间卡住且报 `Could not find nvcc`，按上一条安装 CUDA Toolkit。
+
+**Q：显存占用到 12G 后立刻被释放、服务启动失败？**
+A：通常是旧进程未清理干净导致端口冲突或显存残留。先执行：`pkill -9 -f StageEngineCoreProc && pkill -9 -f "vllm serve" && pkill -9 -f uvicorn`，再重新启动。
+
+**Q：conda 环境被重建后 vLLM 消失了？**
+A：`ppt2video` 环境一旦被 `conda create` 重建，vllm / vllm-omni / nvcc 都会丢失（不在 `requirements.txt` 中）。重跑 `bash scripts/setup_conda.sh` 会一并装回（含 CUDA Toolkit 与 vLLM-Omni）。注意不要自行 `conda create -n ppt2video` 重建环境。
 
 **Q：模型下载很慢或失败？**
 A：脚本默认从 ModelScope 下载。可手动执行 `python scripts/download_models.py`，或使用 Hugging Face 下载后放入对应目录。

@@ -1,5 +1,6 @@
 import uuid
 import asyncio
+import logging
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from app.models.database import get_db
 from app.models.schemas import (
@@ -7,6 +8,8 @@ from app.models.schemas import (
     SlideOut, SlideUpdate,
 )
 from app.services.script_generator import generate_slide_script, generate_topic
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/scripts", tags=["scripts"])
 
@@ -64,8 +67,9 @@ async def _run_script_generation(
 
             try:
                 narration = await generate_slide_script(s, topic, ref_texts, word_count, model)
-            except Exception:
-                narration = f"第{s['slide_number']}页的内容是：{s.get('title', '')}。{s.get('content', '')[:100]}"
+            except Exception as e:
+                logger.error("第 %s 页讲稿生成失败: %s", s.get("slide_number"), e)
+                narration = "【讲稿生成失败：AI 服务不可用，请检查 DeepSeek API Key 或稍后重试】"
 
             await db.execute(
                 "UPDATE slides SET narration = ?, status = 'scripted' WHERE id = ?",
@@ -121,7 +125,8 @@ async def generate_slide_narration(slide_id: int, data: SingleSlideGenerateReque
             data.llm_model,
         )
     except Exception as e:
-        raise HTTPException(500, f"讲稿生成失败: {e}")
+        logger.error("第 %s 页单页讲稿生成失败: %s", slide["slide_number"], e)
+        raise HTTPException(500, "AI 服务不可用，请检查 DeepSeek API Key 或稍后重试")
 
     await db.execute(
         "UPDATE slides SET narration = ?, status = 'scripted' WHERE id = ?",
@@ -138,7 +143,7 @@ async def update_slide_narration(slide_id: int, data: SlideUpdate):
     db = await get_db()
     if data.narration is not None:
         await db.execute(
-            "UPDATE slides SET narration = ? WHERE id = ?",
+            "UPDATE slides SET narration = ?, status = 'scripted' WHERE id = ?",
             (data.narration, slide_id),
         )
         await db.commit()

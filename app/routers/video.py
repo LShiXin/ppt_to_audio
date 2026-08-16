@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
@@ -47,8 +48,25 @@ async def generate_video(data: VideoGenerateRequest, background_tasks: Backgroun
 async def _run_video_generation(task_id: str, slides: list[dict], project_id: int):
     try:
         db = await get_db()
-        _task_status[task_id] = {"status": "running", "progress": 50, "message": "正在编码视频..."}
-        output_path = build_video_from_slides(slides, project_id)
+        total = len(slides)
+
+        def _on_progress(done: int, n: int):
+            _task_status[task_id] = {
+                "status": "running",
+                "progress": int((done / n) * 90),
+                "message": f"正在编码第 {done}/{n} 页视频...",
+            }
+
+        _task_status[task_id] = {
+            "status": "running", "progress": 0, "message": "正在准备视频合成...",
+        }
+        output_path = await asyncio.to_thread(
+            build_video_from_slides, slides, project_id, _on_progress
+        )
+
+        _task_status[task_id] = {
+            "status": "running", "progress": 95, "message": "正在写入数据库...",
+        }
         await db.execute(
             "UPDATE projects SET video_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (output_path, project_id),
@@ -80,5 +98,9 @@ async def download_video(project_uuid: str):
     video_full = OUTPUTS_DIR / project["video_path"]
     if not video_full.exists():
         raise HTTPException(404, "视频文件已丢失")
-    return FileResponse(str(video_full), media_type="video/mp4",
+    resp = FileResponse(str(video_full), media_type="video/mp4",
                         filename=f"project_{project['id']}.mp4")
+    # 禁止缓存：URL 固定不变，重新生成后必须下载新文件
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp

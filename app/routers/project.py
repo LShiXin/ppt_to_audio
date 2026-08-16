@@ -105,6 +105,9 @@ async def upload_pptx(project_uuid: str, file: UploadFile = File(...)):
     images_dir = UPLOADS_DIR / str(project_id) / "slide_images"
     extract_slide_images(str(full_path), str(images_dir))
 
+    from app.services.thumbnails import generate_slide_thumbnails
+    generate_slide_thumbnails(str(images_dir))
+
     await db.execute(
         "UPDATE projects SET ppt_filename = ?, status = 'parsed', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         (file.filename, project_id),
@@ -141,6 +144,9 @@ async def upload_pdf(project_uuid: str, file: UploadFile = File(...)):
         slides = parse_pdf(str(full_path), str(images_dir))
     except RuntimeError as e:
         raise HTTPException(400, str(e))
+
+    from app.services.thumbnails import generate_slide_thumbnails
+    generate_slide_thumbnails(str(images_dir))
 
     await db.execute(
         "UPDATE projects SET ppt_filename = ?, status = 'parsed', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -192,7 +198,11 @@ async def reparse_slides(project_uuid: str):
         images_dir = str(UPLOADS_DIR / str(project_id) / "slide_images")
         slides = parse_pdf(full_path, images_dir)
     else:
+        images_dir = str(UPLOADS_DIR / str(project_id) / "slide_images")
         slides = parse_pptx(full_path)
+
+    from app.services.thumbnails import generate_slide_thumbnails
+    generate_slide_thumbnails(images_dir)
 
     await db.execute("DELETE FROM slides WHERE project_id = ?", (project_id,))
     for s in slides:
@@ -289,4 +299,20 @@ async def get_slide_image(project_uuid: str, slide_number: int):
     image_path = UPLOADS_DIR / str(project_id) / "slide_images" / f"slide_{slide_number}.png"
     if not image_path.exists():
         raise HTTPException(404, "幻灯片图片不存在")
-    return FileResponse(str(image_path), media_type="image/png")
+    resp = FileResponse(str(image_path), media_type="image/png")
+    resp.headers["Cache-Control"] = "public, max-age=3600, immutable"
+    return resp
+
+
+@router.get("/{project_uuid}/slide-thumb/{slide_number}")
+async def get_slide_thumb(project_uuid: str, slide_number: int):
+    db = await get_db()
+    project_id = await _resolve_project_id(db, project_uuid)
+    thumb_path = (
+        UPLOADS_DIR / str(project_id) / "slide_images" / "thumbs" / f"slide_{slide_number}.jpg"
+    )
+    if not thumb_path.exists():
+        raise HTTPException(404, "幻灯片缩略图不存在")
+    resp = FileResponse(str(thumb_path), media_type="image/jpeg")
+    resp.headers["Cache-Control"] = "public, max-age=3600, immutable"
+    return resp

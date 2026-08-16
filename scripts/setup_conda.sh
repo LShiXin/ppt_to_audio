@@ -46,6 +46,17 @@ conda run -n "$ENV_NAME" pip install qwen-tts
 echo "   如果 sox 安装失败，请手动运行: sudo apt-get install -y sox"
 conda install -n "$ENV_NAME" -c conda-forge sox -y 2>/dev/null || true
 
+# 3.5. 安装 CUDA 工具链 (nvcc，flashinfer JIT 编译必需)
+echo "[3.5/4] 安装 CUDA Toolkit (nvcc)..."
+conda install -n "$ENV_NAME" -c nvidia cuda-toolkit=13.2.2 -y
+
+# 3.6. 安装 vLLM-Omni（必须放在最后；vllm==0.26.0 与 vllm-omni==0.26.0 配对：
+#      vllm 0.25 移除了 OmniRequest.num_in_flight_tokens 会推理崩溃，
+#      vllm 0.24 缺少 vllm.entrypoints.scale_out 无法导入）
+echo "[3.6/4] 安装 vLLM-Omni..."
+conda run -n "$ENV_NAME" pip install vllm==0.26.0 vllm-omni==0.26.0 flashinfer-python==0.6.14 \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple --default-timeout=1000
+
 # 4. 下载模型
 echo "[4/4] 下载 Qwen3-TTS 模型..."
 if [ ! -d "$SCRIPT_DIR/models/Qwen3-TTS-12Hz-1.7B-CustomVoice" ]; then
@@ -57,5 +68,5 @@ fi
 
 echo ""
 echo "=== 安装完成！==="
-echo "启动命令: conda run -n $ENV_NAME python $SCRIPT_DIR/run.py"
-echo "或: bash $SCRIPT_DIR/run.sh"
+echo "启动命令: bash $SCRIPT_DIR/start_all.sh (应用 8003 + vLLM 8000)"
+echo "不要使用 run.sh/run.py（端口 8000 会与 vLLM 冲突且不启用 vllm 后端）"

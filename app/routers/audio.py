@@ -1,5 +1,6 @@
 import uuid
 from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 from app.models.database import get_db
 from app.models.schemas import AudioGenerateRequest
 from app.services.tts_backend import generate_audio_with_segmentation, clear_tts_cache
@@ -206,3 +207,26 @@ async def get_slide_audio(slide_id: int):
     if not slide or not slide["narration_audio"]:
         raise HTTPException(404, "该幻灯片音频未生成")
     return {"audio_path": slide["narration_audio"]}
+
+
+@router.get("/download/{project_uuid}")
+async def download_composed_audio(project_uuid: str):
+    db = await get_db()
+    row = await db.execute(
+        "SELECT id, composed_audio FROM projects WHERE uuid = ?", (project_uuid,)
+    )
+    project = await row.fetchone()
+    if not project or not project["composed_audio"]:
+        raise HTTPException(404, "合成音频未生成")
+    audio_full = OUTPUTS_DIR / project["composed_audio"]
+    if not audio_full.exists():
+        raise HTTPException(404, "合成音频文件已丢失")
+    resp = FileResponse(
+        str(audio_full),
+        media_type="audio/mpeg",
+        filename=f"project_{project['id']}.mp3",
+    )
+    # 禁止缓存：URL 固定不变，重新生成后必须下载新文件
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp

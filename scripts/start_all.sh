@@ -11,6 +11,10 @@ APP_PORT="${APP_PORT:-8003}"
 VLLM_PORT="${VLLM_PORT:-8000}"
 VLLM_OMNI_MODEL="${VLLM_OMNI_MODEL:-base}"
 
+export PATH="$CONDA_BIN:$PATH"
+export CUDA_HOME="$CONDA_PATH/envs/$ENV_NAME"
+export CUDA_PATH="$CONDA_PATH/envs/$ENV_NAME"
+
 APP_LOG="$PROJECT_DIR/logs/app.log"
 APP_PID_FILE="/tmp/ppt2audio_app.pid"
 
@@ -41,6 +45,8 @@ if [ ! -d "$CONDA_PATH/envs/$ENV_NAME/lib64/stubs" ]; then
         "$CONDA_PATH/envs/$ENV_NAME/lib64/stubs/libcuda.so" 2>/dev/null || true
     ln -sf ../../targets/x86_64-linux/lib/stubs/libnvidia-ml.so \
         "$CONDA_PATH/envs/$ENV_NAME/lib64/stubs/libnvidia-ml.so" 2>/dev/null || true
+    ln -sf ../../lib/libcudart.so \
+        "$CONDA_PATH/envs/$ENV_NAME/lib64/stubs/libcudart.so" 2>/dev/null || true
 fi
 
 echo "[1/1] 启动 PPT 转音频 + vLLM-Omni..."

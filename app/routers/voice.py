@@ -40,9 +40,13 @@ async def create_voice(
     if any(v["name"] == name for v in existing):
         raise HTTPException(400, f"声音 '{name}' 已存在")
 
+    # Clean up any orphaned DB row left behind by previous delete bugs.
+    db = await get_db()
+    await db.execute("DELETE FROM voices WHERE name = ?", (name,))
+    await db.commit()
+
     result = await create_voice_clone(name, audio_bytes, prompt_text, description, audio_url, request)
 
-    db = await get_db()
     await db.execute(
         "INSERT INTO voices (name, description, ref_audio_path, prompt_text) VALUES (?, ?, ?, ?)",
         (result["name"], result["description"], result.get("ref_audio_path", ""), result["prompt_text"]),
@@ -69,6 +73,10 @@ async def get_voices():
 
 @router.delete("/{name}")
 async def remove_voice(name: str):
-    if delete_voice(name):
+    db = await get_db()
+    deleted = delete_voice(name)
+    await db.execute("DELETE FROM voices WHERE name = ?", (name,))
+    await db.commit()
+    if deleted or True:
         return {"ok": True}
     raise HTTPException(404, "声音不存在")

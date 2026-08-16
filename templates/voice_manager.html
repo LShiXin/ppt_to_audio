@@ -17,8 +17,6 @@
                 class="w-full border rounded-lg px-3 py-2 mb-3 focus:ring-2 focus:ring-blue-500 outline-none">
             <input x-model="voiceDesc" type="text" placeholder="描述 (可选)"
                 class="w-full border rounded-lg px-3 py-2 mb-3 focus:ring-2 focus:ring-blue-500 outline-none">
-            <input x-model="promptText" type="text" placeholder="参考音频对应的文本 (重要: 用于对齐)"
-                class="w-full border rounded-lg px-3 py-2 mb-3 focus:ring-2 focus:ring-blue-500 outline-none">
             <label class="block mb-3">
                 <span class="text-sm text-gray-500">参考音频 (3-10秒, 人声清晰)</span>
                 <input type="file" accept=".wav,.mp3,.ogg,.flac" @change="onFile" class="block mt-1">
@@ -47,7 +45,6 @@
                     <button @click="remove(v.name)" class="text-red-400 hover:text-red-600 text-sm">删除</button>
                 </div>
                 <p class="text-sm text-gray-500 mt-1" x-text="v.description || '无描述'"></p>
-                <p class="text-xs text-gray-400 mt-2" x-text="'参考文本: ' + (v.prompt_text || '未提供')"></p>
             </div>
         </template>
     </div>
@@ -60,7 +57,6 @@ function voiceManager() {
         showCreate: false,
         voiceName: '',
         voiceDesc: '',
-        promptText: '',
         audioFile: null,
         uploading: false,
         msg: '',
@@ -71,19 +67,18 @@ function voiceManager() {
         },
         onFile(e) { this.audioFile = e.target.files[0]; },
         async create() {
-            if (!this.voiceName.trim() || !this.audioFile || !this.promptText.trim()) {
-                this.msg = '请填写所有必填项'; this.msgType = 'error'; return;
+            if (!this.voiceName.trim() || !this.audioFile) {
+                this.msg = '请填写声线名称并选择音频文件'; this.msgType = 'error'; return;
             }
             this.uploading = true; this.msg = '';
             const fd = new FormData();
             fd.append('name', this.voiceName);
             fd.append('description', this.voiceDesc);
-            fd.append('prompt_text', this.promptText);
             fd.append('audio', this.audioFile);
             try {
                 await axios.post('/api/voices/', fd);
                 this.showCreate = false;
-                this.voiceName = ''; this.voiceDesc = ''; this.promptText = ''; this.audioFile = null;
+                this.voiceName = ''; this.voiceDesc = ''; this.audioFile = null;
                 await this.load();
             } catch(e) {
                 this.msg = e.response?.data?.detail || '创建失败';

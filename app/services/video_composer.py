@@ -2,6 +2,7 @@ import subprocess
 import uuid
 import os
 from pathlib import Path
+from typing import Callable
 from pydub import AudioSegment
 from app.config import OUTPUTS_DIR, UPLOADS_DIR
 
@@ -16,6 +17,7 @@ def compose_video(
     audio_paths: list[str],
     slide_gap: float = 0.5,
     output_filename: str | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> str:
     if output_filename is None:
         output_filename = f"project_{uuid.uuid4().hex[:8]}.mp4"
@@ -51,6 +53,8 @@ def compose_video(
 
             concat_lines.append(f"file '{seg_video}'")
             segment_index += 1
+            if progress_callback:
+                progress_callback(i + 1, len(slide_images))
 
         concat_file = tmp_dir / "concat.txt"
         concat_file.write_text("\n".join(concat_lines))
@@ -71,7 +75,11 @@ def compose_video(
     return str(output_path.relative_to(OUTPUTS_DIR))
 
 
-def build_video_from_slides(slides: list[dict], project_id: int) -> str:
+def build_video_from_slides(
+    slides: list[dict],
+    project_id: int,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> str:
     slide_images = []
     audio_paths = []
 
@@ -86,4 +94,4 @@ def build_video_from_slides(slides: list[dict], project_id: int) -> str:
             raise ValueError(f"第 {s['slide_number']} 页音频未生成，请先生成音频")
         audio_paths.append(str(OUTPUTS_DIR / s["narration_audio"]))
 
-    return compose_video(slide_images, audio_paths)
+    return compose_video(slide_images, audio_paths, progress_callback=progress_callback)

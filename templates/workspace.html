@@ -107,7 +107,7 @@
                         </div>
                         <div>
                             <label class="text-xs text-gray-500">温度 (Temperature): <span x-text="temperature"></span></label>
-                            <input type="range" x-model="temperature" min="0.1" max="2.0" step="0.1" class="w-full">
+                            <input type="range" x-model="temperature" min="0.3" max="1.5" step="0.1" class="w-full">
                         </div>
                         <div>
                             <label class="text-xs text-gray-500">种子 (Seed):</label>
@@ -152,6 +152,12 @@
                             class="bg-red-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-red-700 transition">
                             下载视频
                         </button>
+                        <div x-show="downloadState" class="w-full md:w-auto flex items-center gap-2 text-xs text-gray-600 border rounded-lg px-3 py-2 bg-white">
+                            <span class="pulse" x-text="downloadState === 'connecting' ? '⏳ 正在连接...' : ('⬇ ' + downloadFilename + ' ' + downloadProgress + '%')"></span>
+                            <div class="w-24 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                <div class="h-full bg-blue-600 transition-all" :style="'width:' + downloadProgress + '%'"></div>
+                            </div>
+                        </div>
                     </div>
 
                     <div x-show="currentSlide" class="border rounded-xl p-5 fade-in">
@@ -168,7 +174,8 @@
                                 <label class="text-xs text-gray-500 mb-1 block">PDF 预览</label>
                                 <div class="bg-gray-100 rounded-lg overflow-hidden flex items-center justify-center" style="min-height:180px;">
                                     <img x-show="currentSlide && !imgError"
-                                        :src="'/api/projects/' + projectUuid + '/slide-image/' + currentSlide.slide_number"
+                                        :src="'/api/projects/' + projectUuid + '/slide-thumb/' + currentSlide.slide_number"
+                                        loading="lazy"
                                         class="w-full object-contain" style="max-height:300px;"
                                         @error="imgError = true" @load="imgError = false">
                                     <div x-show="!currentSlide || imgError" class="text-gray-400 text-sm">
@@ -190,9 +197,13 @@
                         </div>
 
                         <label class="text-xs text-gray-500">旁白讲稿</label>
-                        <textarea x-model="currentSlide.narration" @change="saveNarration()"
+                        <textarea x-model="currentSlide.narration" @input="onNarrationInput()" @change="saveNarration()"
                             class="w-full border rounded-lg p-3 text-sm min-h-[120px] focus:ring-2 focus:ring-blue-500 outline-none"
                             placeholder="点击&#34;生成本页讲稿&#34;或手动输入旁白..."></textarea>
+                        <div class="mt-1 text-xs" x-show="saveState">
+                            <span x-text="saveState === 'saving' ? '保存中...' : saveState === 'saved' ? '已保存 ✓' : '保存失败'" 
+                                :class="saveState === 'failed' ? 'text-red-500' : 'text-green-600'"></span>
+                        </div>
 
                         <div x-show="currentSlide.narration_audio" class="mt-3">
                             <label class="text-xs text-gray-500 mb-1 block">音频预览</label>
@@ -237,10 +248,6 @@
                             <label class="text-xs text-gray-500">或填写音频 URL</label>
                             <input x-model="newVoiceAudioUrl" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="https://example.com/audio.wav">
                         </div>
-                        <div>
-                            <label class="text-xs text-gray-500">参考文本 (音频对应的文本内容)</label>
-                            <input x-model="newVoiceText" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="音频中说的话">
-                        </div>
                     </div>
                     <div class="flex gap-2 mt-4 justify-end">
                         <button @click="showVoiceModal = false" class="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
@@ -275,7 +282,6 @@ function workspace(projectUuid) {
         newVoiceName: '',
         newVoiceAudioFile: null,
         newVoiceAudioUrl: '',
-        newVoiceText: '',
         wordCount: '',
         speed: 1.0,
         temperature: 0.5,
@@ -287,6 +293,9 @@ function workspace(projectUuid) {
         scriptLoading: false,
         singleScriptLoading: false,
         scriptProgress: '',
+        saveState: '',
+        saveTimer: null,
+        savedNarration: '',
         audioLoading: false,
         singleAudioLoading: false,
         audioProgress: '',
@@ -295,6 +304,9 @@ function workspace(projectUuid) {
         videoLoading: false,
         videoProgress: '',
         videoPath: '',
+        downloadState: '',
+        downloadProgress: 0,
+        downloadFilename: '',
         async switchModel() {
             const target = this.ttsModel === 'base' ? 'customvoice' : 'base';
             if (!confirm('切换到 ' + (target === 'base' ? '声音克隆' : '预设音色') + ' 模式，需要约 40-60 秒，是否继续？')) return;
@@ -347,11 +359,54 @@ function workspace(projectUuid) {
                 this.composedAudio = pr.data.composed_audio || '';
                 this.videoPath = pr.data.video_path || '';
                 if (this.slides.length) this.selectSlide(this.slides[0]);
+                this.prefetchThumbs();
             } catch(e) { this.error = '加载失败: ' + e.message; }
             this.loading = false;
         },
 
-        selectSlide(s) { this.currentSlide = { ...s }; this.imgError = false; },
+        prefetchThumbs() {
+            if (!this.slides.length) return;
+            const first = this.slides[0].slide_number;
+            const remaining = this.slides.map(s => s.slide_number).filter(n => n !== first);
+            for (const n of remaining) {
+                const img = new Image();
+                img.src = '/api/projects/' + this.projectUuid + '/slide-thumb/' + n;
+            }
+        },
+
+        selectSlide(s) {
+            this.flushNarration();
+            this.currentSlide = { ...s };
+            this.savedNarration = this.currentSlide.narration || '';
+            this.imgError = false;
+            this.saveState = '';
+        },
+
+        syncSlideFrom(updated) {
+            if (!updated) return;
+            const idx = this.slides.findIndex(s => s.id === updated.id);
+            if (idx >= 0) this.slides[idx] = { ...updated };
+            if (this.currentSlide && this.currentSlide.id === updated.id) {
+                this.currentSlide.status = updated.status;
+                this.currentSlide.narration_audio = updated.narration_audio;
+                this.currentSlide.narration = updated.narration;
+                this.savedNarration = updated.narration || '';
+            }
+        },
+
+        onNarrationInput() {
+            this.saveState = '';
+            if (this.saveTimer) clearTimeout(this.saveTimer);
+            this.saveTimer = setTimeout(() => this.saveNarration(), 1000);
+        },
+
+        flushNarration() {
+            if (this.saveTimer) {
+                clearTimeout(this.saveTimer);
+                this.saveTimer = null;
+            }
+            if (this.currentSlide && this.currentSlide.narration !== this.savedNarration) this.saveNarration();
+        },
 
         async uploadPDF(e) {
             const f = e.target.files[0];
@@ -396,6 +451,7 @@ function workspace(projectUuid) {
         },
 
         async generateScript() {
+            this.flushNarration();
             this.scriptLoading = true;
             try {
                 const r = await axios.post('/api/scripts/generate', {
@@ -409,20 +465,18 @@ function workspace(projectUuid) {
                     const t = tr.data;
                     if (t.status === 'running') {
                         this.scriptProgress = t.message;
-                        const sr = await axios.get('/api/projects/' + this.projectUuid + '/slides');
-                        this.slides = sr.data;
-                        if (this.currentSlide) {
-                            const updated = this.slides.find(s => s.id === this.currentSlide.id);
-                            if (updated) this.currentSlide = { ...updated };
-                        }
-                        setTimeout(poll, 1500);
+                        setTimeout(poll, 2000);
                     } else if (t.status === 'completed') {
                         const sr = await axios.get('/api/projects/' + this.projectUuid + '/slides');
                         this.slides = sr.data;
                         this.project.status = 'scripted';
+                        const failedSlide = this.slides.find(s => (s.narration || '').startsWith('【讲稿生成失败'));
+                        if (failedSlide) {
+                            this.error = '讲稿生成失败：AI 服务不可用，请检查 DeepSeek API Key 或稍后重试';
+                        }
                         if (this.currentSlide) {
                             const updated = this.slides.find(s => s.id === this.currentSlide.id);
-                            if (updated) this.currentSlide = { ...updated };
+                            if (updated) this.syncSlideFrom(updated);
                         }
                         this.scriptLoading = false;
                     } else {
@@ -436,6 +490,7 @@ function workspace(projectUuid) {
 
         async generateSlideScript() {
             if (!this.currentSlide) return;
+            this.flushNarration();
             this.singleScriptLoading = true;
             this.currentSlide.narration = '';
             try {
@@ -446,15 +501,36 @@ function workspace(projectUuid) {
                 const idx = this.slides.findIndex(s => s.id === this.currentSlide.id);
                 if (idx >= 0) this.slides[idx] = r.data;
                 this.currentSlide = { ...r.data };
+                this.savedNarration = r.data.narration || '';
+                this.saveState = '';
             } catch(e) { this.error = '讲稿生成失败: ' + (e.response?.data?.detail || e.message); }
             this.singleScriptLoading = false;
         },
 
         async saveNarration() {
             if (!this.currentSlide) return;
+            const slideId = this.currentSlide.id;
+            const narration = this.currentSlide.narration || '';
+            if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
+            if (this.savedNarration === narration) return;
+            this.saveState = 'saving';
             try {
-                await axios.put('/api/scripts/slides/' + this.currentSlide.id, { narration: this.currentSlide.narration });
-            } catch(e) {}
+                await axios.put('/api/scripts/slides/' + slideId, { narration: narration });
+                const idx = this.slides.findIndex(s => s.id === slideId);
+                if (idx >= 0) {
+                    this.slides[idx].narration = narration;
+                    this.slides[idx].status = 'scripted';
+                }
+                this.savedNarration = narration;
+                if (this.currentSlide && this.currentSlide.id === slideId) {
+                    this.currentSlide.narration = narration;
+                    this.currentSlide.status = 'scripted';
+                }
+                this.saveState = 'saved';
+            } catch(e) {
+                this.saveState = 'failed';
+                this.error = '讲稿保存失败: ' + (e.response?.data?.detail || e.message);
+            }
         },
 
         voiceId() {
@@ -466,6 +542,7 @@ function workspace(projectUuid) {
         },
 
         async generateAudio() {
+            this.flushNarration();
             this.audioLoading = true;
             this.audioProgress = '启动中...';
             try {
@@ -492,8 +569,8 @@ function workspace(projectUuid) {
                             }
                         }
                         if (this.currentSlide) {
-                            const updated = this.slides.find(s => s.id === this.currentSlide.id);
-                            if (updated && updated.narration_audio) this.currentSlide = { ...updated };
+                            const cs = t.completed_slides.find(c => c.slide_id === this.currentSlide.id);
+                            if (cs && cs.audio_path) this.currentSlide.narration_audio = cs.audio_path;
                         }
                     }
                     if (t.status === 'running' || t.status === 'composing') {
@@ -519,6 +596,7 @@ function workspace(projectUuid) {
 
         async generateSingleAudio() {
             if (!this.currentSlide || !this.currentSlide.narration) return;
+            this.flushNarration();
             this.singleAudioLoading = true;
             this.currentSlide.narration_audio = '';
             try {
@@ -539,7 +617,10 @@ function workspace(projectUuid) {
                         setTimeout(poll, 2000);
                     } else if (tr.data.status === 'completed') {
                         await this.load();
-                        this.currentSlide = this.slides.find(s => s.id === this.currentSlide.id);
+                        if (this.currentSlide) {
+                            const updated = this.slides.find(s => s.id === this.currentSlide.id);
+                            if (updated) this.syncSlideFrom(updated);
+                        }
                         this.singleAudioLoading = false;
                     } else {
                         this.error = tr.data.message;
@@ -553,12 +634,57 @@ function workspace(projectUuid) {
             }
         },
 
-        downloadAudio() {
-            if (this.composedAudio) window.open('/outputs/' + this.composedAudio);
+        async downloadAudio() {
+            if (!this.composedAudio) return;
+            await this.downloadWithProgress(
+                '/api/audio/download/' + this.projectUuid + '?t=' + Date.now(),
+                'project_' + this.project.id + '.mp3');
+        },
+
+        async downloadVideo() {
+            if (!this.videoPath) return;
+            await this.downloadWithProgress(
+                '/api/video/download/' + this.projectUuid + '?t=' + Date.now(),
+                'project_' + this.project.id + '.mp4');
+        },
+
+        async downloadWithProgress(url, filename) {
+            this.downloadState = 'connecting';
+            this.downloadProgress = 0;
+            this.downloadFilename = filename;
+            try {
+                const resp = await fetch(url);
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const total = Number(resp.headers.get('content-length')) || 0;
+                const reader = resp.body.getReader();
+                const chunks = [];
+                let received = 0;
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    chunks.push(value);
+                    received += value.length;
+                    this.downloadProgress = total ? Math.round((received / total) * 100) : 0;
+                    this.downloadState = 'downloading';
+                }
+                const blob = new Blob(chunks);
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(a.href);
+                this.downloadState = '';
+            } catch(e) {
+                this.error = '下载失败: ' + (e.message || e);
+                this.downloadState = '';
+            }
         },
 
         async generateVideo() {
             if (this.videoPath && !confirm('重新生成将覆盖当前视频文件，是否继续？')) return;
+            this.flushNarration();
             this.videoLoading = true;
             this.videoProgress = '启动中...';
             try {
@@ -586,7 +712,7 @@ function workspace(projectUuid) {
         },
 
         downloadVideo() {
-            if (this.videoPath) window.open('/outputs/' + this.videoPath);
+            if (this.videoPath) window.location.href = '/api/video/download/' + this.projectUuid + '?t=' + Date.now();
         },
 
         onVoiceFileChange(e) {
@@ -599,7 +725,6 @@ function workspace(projectUuid) {
                 const fd = new FormData();
                 fd.append('name', this.newVoiceName);
                 fd.append('audio_url', this.newVoiceAudioUrl);
-                fd.append('prompt_text', this.newVoiceText);
                 if (this.newVoiceAudioFile) {
                     fd.append('audio', this.newVoiceAudioFile);
                 }
@@ -608,7 +733,6 @@ function workspace(projectUuid) {
                 this.newVoiceName = '';
                 this.newVoiceAudioFile = null;
                 this.newVoiceAudioUrl = '';
-                this.newVoiceText = '';
                 const vr = await axios.get('/api/voices/');
                 this.customVoices = vr.data;
             } catch(e) {

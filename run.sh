@@ -9,7 +9,8 @@ export PATH="$CONDA_PATH/bin:$CONDA_PATH/envs/$ENV_NAME/bin:$PATH"
 
 cd "$SCRIPT_DIR"
 echo "=== 启动 PPT转音频 AI工具 ==="
-echo "访问: http://localhost:8000"
+echo "访问: http://localhost:8003"
+echo "注意: 仅本地 TTS 后端；如需 vLLM-Omni 请用 bash scripts/start_all.sh"
 echo ""
 
 conda run -n "$ENV_NAME" python run.py
